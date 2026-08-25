@@ -50,9 +50,10 @@ func (s *EntropySource) IsSealed() bool {
 	return s.State == SourceStateSealed
 }
 
-// CanWrite 是否仍接受新窗口写入（封存后拒绝）。
+// CanWrite 是否仍接受新诊断证据写入（采样窗口、重启记录、新诊断快照）。
+// 封存后诊断证据应冻结，一切写入均被拒绝。
 func (s *EntropySource) CanWrite() bool {
-	return true
+	return !s.IsSealed()
 }
 
 // SealedStates 可封存的合法来源态（除已封存外皆可）。

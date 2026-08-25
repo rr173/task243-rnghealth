@@ -193,7 +193,7 @@ func (s *Service) RecordRestart(sourceID, atSeq, baselineSeq int64, now time.Tim
 	if err != nil {
 		return nil, err
 	}
-	if src.IsSealed() {
+	if !src.CanWrite() {
 		return nil, model.ErrSealed
 	}
 	rb := &model.RestartBoundary{SourceID: sourceID, AtSeq: atSeq, BaselineSeq: baselineSeq, BaselineMissing: baselineSeq == 0}
