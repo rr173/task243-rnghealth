@@ -142,17 +142,27 @@ func (w *WindowStore) RecentWindows(sourceID, beforeSeq int64, limit int) ([]*mo
 	return out, rows.Err()
 }
 
-// ReevaluationEvidence returns stored hashes for a window.
+// ReevaluationEvidence 取重评估所需的跨窗口重播哈希证据（仅依赖已持久化哈希）。
+// 返回 prevHash = 紧邻前序窗口的样本哈希；recentHashes = 更早期窗口哈希（倒序，不含当前窗口）。
+// recentHashes 显式排除当前窗口自身，否则总会命中自身哈希而误判为重播。
 func (w *WindowStore) ReevaluationEvidence(sourceID, seq int64) (string, []string, error) {
-	recent, err := w.RecentWindows(sourceID, seq, 8)
+	// 前序窗口（不含当前序号），取最近 9 个：第 1 个为 prevHash，其余为 recentHashes。
+	recent, err := w.RecentWindows(sourceID, seq-1, 9)
 	if err != nil {
 		return "", nil, err
 	}
-	hashes := make([]string, 0, len(recent))
-	for _, win := range recent {
-		hashes = append(hashes, win.SampleHash)
+	if len(recent) == 0 {
+		return "", nil, nil
 	}
-	return "", hashes, nil
+	prevHash := recent[0].SampleHash
+	recentHashes := make([]string, 0, len(recent)-1)
+	for _, win := range recent[1:] {
+		if win.SampleHash == prevHash && win.SampleHash != "" {
+			continue // prevHash 与 recentHashes 去重，避免重复命中
+		}
+		recentHashes = append(recentHashes, win.SampleHash)
+	}
+	return prevHash, recentHashes, nil
 }
 
 // MaxSeq 取某熵源当前最大窗口序号。

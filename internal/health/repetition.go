@@ -15,12 +15,21 @@ type RepetitionResult struct {
 	Detail string
 }
 
-// DetectHashRepetition is used when reevaluation has only persisted hashes.
+// DetectHashRepetition 仅依据已持久化的哈希证据检测跨窗口重播（重评估路径，原始样本未落库）。
+// prevHash 为该熵源紧邻前序窗口的样本哈希；recentHashes 为更早期窗口哈希。
+// 与 DetectRepetition 的哈希判定保持一致：与上一窗口哈希相同判为重播（得分 1），
+// 与更早期窗口哈希相同亦判为重播（得分 0.95）。
+// 注意：长重复串/单一字节占主导等启发式依赖原始样本，重评估无法重算，故不纳入。
 func DetectHashRepetition(sampleHash, prevHash string, recentHashes []string) RepetitionResult {
 	if prevHash != "" && sampleHash == prevHash {
-		return RepetitionResult{IsReplay: true, Score: 1, Detail: "previous hash repeated"}
+		return RepetitionResult{Score: 1.0, IsReplay: true, Detail: "identical to previous window (replay)"}
 	}
-	return RepetitionResult{Score: 0}
+	for _, h := range recentHashes {
+		if h != "" && h == sampleHash {
+			return RepetitionResult{Score: 0.95, IsReplay: true, Detail: "duplicate of an earlier window (replay)"}
+		}
+	}
+	return RepetitionResult{Score: 0, IsReplay: false, Detail: "no repetition"}
 }
 
 // SampleHash 计算窗口原始样本的 SHA-256（十六进制）。
