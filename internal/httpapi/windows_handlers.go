@@ -68,14 +68,26 @@ func (s *Server) handleBatchWindows(w http.ResponseWriter, r *http.Request) {
 		items = append(items, ingest.BatchItem{Sample: sample, Seq: it.Seq})
 	}
 	wins, errs := s.svc.BatchWindows(req.SourceID, items, now())
-	results := make([]map[string]interface{}, 0, len(wins))
-	for i := range wins {
+	// 每个输入项按位置返回成功或错误，局部失败不丢失后续合法窗口的落库结果。
+	results := make([]map[string]interface{}, len(req.Items))
+	succeeded := 0
+	for i := range req.Items {
 		if errs[i] != nil {
+			results[i] = map[string]interface{}{
+				"ok":    false,
+				"seq":   req.Items[i].Seq,
+				"error": errs[i].Error(),
+			}
 			continue
 		}
-		results = append(results, map[string]interface{}{"window": wins[i]})
+		succeeded++
+		results[i] = map[string]interface{}{
+			"ok":     true,
+			"seq":    req.Items[i].Seq,
+			"window": wins[i],
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results, "count": len(results)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"results": results, "count": succeeded, "total": len(req.Items)})
 }
 
 func (s *Server) handleListWindows(w http.ResponseWriter, r *http.Request) {

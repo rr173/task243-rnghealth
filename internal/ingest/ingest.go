@@ -120,7 +120,9 @@ func (i *Ingestor) Ingest(sample []byte, sourceID, seq int64, now time.Time) (*m
 	return win, nil
 }
 
-// Batch 批量摄入（同一熵源串行）。返回与入参对齐的结果与错误。
+// Batch 批量摄入（同一熵源串行）。返回与入参等长、按位置对齐的结果与错误：
+// 任一项失败不中断后续项的处理——重复序号等局部错误只标记其所在位置，
+// 后续合法窗口仍照常持久化。成功项的 window 非空、error 为 nil；失败项反之。
 func (i *Ingestor) Batch(sourceID int64, items []BatchItem, now time.Time) ([]*model.SampleWindow, []error) {
 	out := make([]*model.SampleWindow, len(items))
 	errs := make([]error, len(items))
@@ -128,9 +130,6 @@ func (i *Ingestor) Batch(sourceID int64, items []BatchItem, now time.Time) ([]*m
 		w, err := i.Ingest(it.Sample, sourceID, it.Seq, now)
 		out[idx] = w
 		errs[idx] = err
-		if err != nil {
-			return out[:idx+1], errs[:idx+1]
-		}
 	}
 	return out, errs
 }

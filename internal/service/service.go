@@ -79,15 +79,10 @@ func (s *Service) IngestWindow(sourceID, seq int64, sample []byte, now time.Time
 	return s.ingest.Ingest(sample, sourceID, seq, now)
 }
 
-// BatchWindows 批量摄入。
+// BatchWindows 批量摄入。返回与入参等长、按位置对齐的结果与错误：
+// 重复序号等局部失败只影响其所在位置，后续合法窗口仍照常持久化。
 func (s *Service) BatchWindows(sourceID int64, items []ingest.BatchItem, now time.Time) ([]*model.SampleWindow, []error) {
-	wins, errs := s.ingest.Batch(sourceID, items, now)
-	for i, err := range errs {
-		if err != nil {
-			return wins[:i+1], errs[:i+1]
-		}
-	}
-	return wins, errs
+	return s.ingest.Batch(sourceID, items, now)
 }
 
 // GetWindow 读取窗口。
