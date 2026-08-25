@@ -58,24 +58,24 @@ func (p *Publisher) Publish(id int64, now time.Time) (*model.DiagnosticSnapshot,
 }
 
 // Supersede 以新草稿替代已发布快照（保留证据链）。
+//
+// 证据负载在事务外预先冻结（读取用独立连接，避免与写事务争用单连接），随后在
+// 单个写事务内原子完成：写入新草稿、发布为新版本、令旧版本转入 superseded 且
+// superseded_by 指向新版本。仅当旧版本仍处于 published 态时才替代；多个工作流
+// 并发替代同一已发布快照时，只有第一个能成功，其余得到 ErrTransition，从而保证
+// “同一旧版本只能被一个新版本替代”且新旧版本状态与替代关系一致。
 func (p *Publisher) Supersede(publishedID int64, now time.Time) (*model.DiagnosticSnapshot, error) {
 	old, err := p.snaps.Get(publishedID)
 	if err != nil {
 		return nil, err
 	}
-	if !old.IsPublished() {
+	if !old.CanSupersede() {
 		return nil, model.ErrTransition
 	}
-	// 新版本基于当前证据重新冻结。
-	draft, err := p.Draft(old.SourceID, now)
+	// 证据在事务外冻结（读连接）；事务内只做写与并发认领。
+	payload, err := p.builder.BuildPayload(old.SourceID, now)
 	if err != nil {
 		return nil, err
 	}
-	if err := p.snaps.Publish(draft.ID, now); err != nil {
-		return nil, err
-	}
-	if err := p.snaps.Supersede(old.ID, draft.ID); err != nil {
-		return nil, err
-	}
-	return p.snaps.Get(draft.ID)
+	return p.snaps.SupersedePublished(old.ID, payload, now)
 }

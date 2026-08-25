@@ -32,7 +32,8 @@ func (s *DiagnosticSnapshot) CanPublish() bool {
 	return s.State == SnapshotStateDraft
 }
 
-// CanSupersede 是否可被替代（仅已发布）。
+// CanSupersede 是否可被替代（仅处于 published 态：草稿不可替代，
+// 已被替代的版本不可再次替代——同一旧版本只能被一个新版本替代）。
 func (s *DiagnosticSnapshot) CanSupersede() bool {
-	return s.IsPublished()
+	return s.State == SnapshotStatePublished
 }

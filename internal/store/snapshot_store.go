@@ -15,10 +15,21 @@ type SnapshotStore struct {
 // NewSnapshotStore 构造。
 func NewSnapshotStore(db *sql.DB) *SnapshotStore { return &SnapshotStore{db: db} }
 
+// executor 抽象 *sql.DB 与 *sql.Tx 共有的执行能力，使事务内复用扫描逻辑。
+type executor interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
 // NextVersion 取某熵源下一个快照版本号（发布版本单调）。
 func (s *SnapshotStore) NextVersion(sourceID int64) (int, error) {
+	return nextVersionTx(s.db, sourceID)
+}
+
+// nextVersionTx 在指定执行器上取下一版本号（事务内可复用）。
+func nextVersionTx(ex executor, sourceID int64) (int, error) {
 	var v int
-	err := s.db.QueryRow(
+	err := ex.QueryRow(
 		`SELECT COALESCE(MAX(version), 0) + 1 FROM diagnostic_snapshots WHERE source_id = ?`, sourceID,
 	).Scan(&v)
 	return v, mapErr(err)
@@ -40,7 +51,12 @@ func (s *SnapshotStore) Create(snap *model.DiagnosticSnapshot, now time.Time) (i
 
 // Get 按 ID 读取。
 func (s *SnapshotStore) Get(id int64) (*model.DiagnosticSnapshot, error) {
-	row := s.db.QueryRow(
+	return getSnapshotRow(s.db, id)
+}
+
+// getSnapshotRow 在指定执行器上按 ID 读取（事务内可复用）。
+func getSnapshotRow(ex executor, id int64) (*model.DiagnosticSnapshot, error) {
+	row := ex.QueryRow(
 		`SELECT id, source_id, version, state, payload, created_at, published_at, superseded_by
 		 FROM diagnostic_snapshots WHERE id = ?`, id)
 	return scanSnapshot(row)
@@ -95,12 +111,82 @@ func (s *SnapshotStore) Publish(id int64, now time.Time) error {
 	return mapErr(err)
 }
 
-// Supersede 将已发布快照标记为被 newID 替代。
-func (s *SnapshotStore) Supersede(id, newID int64) error {
-	_, err := s.db.Exec(
-		`UPDATE diagnostic_snapshots SET state = ? WHERE id = ?`,
-		model.SnapshotStateSuperseded, id)
-	return mapErr(err)
+// SupersedePublished 在单个写事务内原子替代已发布快照：仅当 publishedID 仍处于
+// published 态时，写入新草稿（payload 由调用方在事务外预先冻结）、发布为新版本，
+// 并令旧版本转入 superseded 且 superseded_by 指向新版本；否则返回 ErrTransition。
+//
+// 同一旧版本只能被一个新版本替代：条件 UPDATE（state='published' -> superseded）
+// 是最终守卫——并发替代中，第一个提交者赢，其余 affected=0 回滚为 ErrTransition。
+// 新旧版本状态与替代关系在事务内一致落库。
+func (s *SnapshotStore) SupersedePublished(publishedID int64, payload string, now time.Time) (*model.DiagnosticSnapshot, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	old, err := getSnapshotRow(tx, publishedID)
+	if err != nil {
+		return nil, err
+	}
+	// 仅 published 态可被替代；草稿与已被替代的版本都拒绝——
+	// 否则同一旧版本会被多个新版本替代。
+	if old.State != model.SnapshotStatePublished {
+		return nil, model.ErrTransition
+	}
+
+	// 在事务内确定新版本号，保证单调且不被并发 Draft 抢占。
+	version, err := nextVersionTx(tx, old.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	created := now.UTC().Format(time.RFC3339Nano)
+	res, err := tx.Exec(
+		`INSERT INTO diagnostic_snapshots(source_id, version, state, payload, created_at, published_at, superseded_by)
+		 VALUES(?,?,?,?,?,?,?)`,
+		old.SourceID, version, model.SnapshotStateDraft, payload, created, created, nil,
+	)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	// 发布新版本。
+	if _, err := tx.Exec(
+		`UPDATE diagnostic_snapshots SET state = ?, published_at = ? WHERE id = ?`,
+		model.SnapshotStatePublished, created, newID,
+	); err != nil {
+		return nil, mapErr(err)
+	}
+	// 条件替代旧版本：仅当仍为 published 时置为 superseded 并记录 superseded_by。
+	// 这是并发守卫——同一旧版本只能被一个新版本成功替代。
+	claimRes, err := tx.Exec(
+		`UPDATE diagnostic_snapshots SET state = ?, superseded_by = ? WHERE id = ? AND state = ?`,
+		model.SnapshotStateSuperseded, newID, publishedID, model.SnapshotStatePublished,
+	)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	affected, err := claimRes.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		// 并发竞争中被另一个工作流抢先替代。
+		return nil, model.ErrTransition
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, mapErr(err)
+	}
+	committed = true
+	return s.Get(newID)
 }
 
 func scanSnapshot(row scannable) (*model.DiagnosticSnapshot, error) { return scanSnapshotRow(row) }
