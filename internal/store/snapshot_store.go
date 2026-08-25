@@ -88,11 +88,25 @@ func (s *SnapshotStore) List(sourceID int64, limit, offset int) ([]*model.Diagno
 }
 
 // Publish 将草稿发布为不可变版本。
+// 以 state=draft 作为并发护栏：仅当草稿存在时才推进，并通过受影响行数裁决并发——
+// 多个工作流同时发布同一草稿时，有且仅有一个请求受影响行数为 1 而成功，其余得到 ErrTransition。
+// 已发布快照不满足 state=draft，因此 state 与 published_at 永不被重复写入而保持不可变。
 func (s *SnapshotStore) Publish(id int64, now time.Time) error {
-	_, err := s.db.Exec(
-		`UPDATE diagnostic_snapshots SET state = ?, published_at = ? WHERE id = ? OR state = ?`,
+	res, err := s.db.Exec(
+		`UPDATE diagnostic_snapshots SET state = ?, published_at = ? WHERE id = ? AND state = ?`,
 		model.SnapshotStatePublished, now.UTC().Format(time.RFC3339Nano), id, model.SnapshotStateDraft)
-	return mapErr(err)
+	if err != nil {
+		return mapErr(err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// 草稿已不存在：要么不存在，要么已被发布/替代。调用方据此区分。
+		return model.ErrTransition
+	}
+	return nil
 }
 
 // Supersede 将已发布快照标记为被 newID 替代。

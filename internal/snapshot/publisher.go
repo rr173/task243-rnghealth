@@ -43,12 +43,20 @@ func (p *Publisher) Draft(sourceID int64, now time.Time) (*model.DiagnosticSnaps
 }
 
 // Publish 发布草稿快照为不可变版本。
+// 同一草稿并发发布时，store 的 UPDATE(state=draft) 仅会让一个请求受影响行数为 1，
+// 其余请求得到 ErrTransition——即同一草稿有且仅有一次发布成功，
+// 已发布快照的 state 与 published_at 永不被重复写入而保持不可变。
 func (p *Publisher) Publish(id int64, now time.Time) (*model.DiagnosticSnapshot, error) {
-	_, err := p.snaps.Get(id)
+	existing, err := p.snaps.Get(id)
 	if err != nil {
 		return nil, err
 	}
+	if !existing.CanPublish() {
+		// 已发布或已被替代：状态与发布时间不可变，拒绝重复发布。
+		return nil, model.ErrTransition
+	}
 	if err := p.snaps.Publish(id, now); err != nil {
+		// 并发赢家已先把草稿发布：本请求未完成发布，返回冲突而非覆盖发布时间。
 		return nil, err
 	}
 	return p.snaps.Get(id)

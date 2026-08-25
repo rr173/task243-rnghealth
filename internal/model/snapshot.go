@@ -27,9 +27,9 @@ func (s *DiagnosticSnapshot) IsPublished() bool {
 	return s.State == SnapshotStatePublished || s.State == SnapshotStateSuperseded
 }
 
-// CanPublish 是否可发布（仅草稿）。
+// CanPublish 是否可发布（仅草稿）。已发布快照不可变，拒绝重复发布。
 func (s *DiagnosticSnapshot) CanPublish() bool {
-	return s.State == SnapshotStateDraft || s.State == SnapshotStatePublished
+	return s.State == SnapshotStateDraft
 }
 
 // CanSupersede 是否可被替代（仅已发布）。
