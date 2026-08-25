@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS entropy_sources (
 	recovery_baseline_seq INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sources_device ON entropy_sources(device);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sources_name_device ON entropy_sources(name, device);
 
 CREATE TABLE IF NOT EXISTS sample_windows (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,

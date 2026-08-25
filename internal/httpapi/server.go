@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -82,6 +84,15 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		code = http.StatusConflict
 	case model.IsInvalidArgument(err):
 		code = http.StatusBadRequest
+	case errors.Is(err, io.EOF):
+		code = http.StatusBadRequest
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		code = http.StatusBadRequest
+	default:
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			code = http.StatusBadRequest
+		}
 	}
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }

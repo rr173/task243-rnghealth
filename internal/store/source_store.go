@@ -22,12 +22,17 @@ func (s *SourceStore) Create(src *model.EntropySource, now time.Time) (int64, er
 	}
 	res, err := s.db.Exec(
 		`INSERT INTO entropy_sources(name, device, state, created_at, sealed_at, last_seq, recovery_baseline_seq)
-		 VALUES(?,?,?,?,?,?,?)`,
+		 VALUES(?,?,?,?,?,?,?) ON CONFLICT(name, device) DO NOTHING`,
 		src.Name, src.Device, model.SourceStateEnabled, now.UTC().Format(time.RFC3339Nano),
 		nullTimeVal(nil), 0, nil,
 	)
 	if err != nil {
 		return 0, mapErr(err)
+	}
+	if affected, err := res.RowsAffected(); err != nil {
+		return 0, err
+	} else if affected == 0 {
+		return 0, model.ErrConflict
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
@@ -105,11 +110,11 @@ func scanSource(row scannable) (*model.EntropySource, error) {
 
 func scanSourceRow(row scannable) (*model.EntropySource, error) {
 	var (
-		id, lastSeq                                          int64
-		name, device, state                                 string
-		createdAt                                           string
-		sealedAt                                            sql.NullTime
-		recoveryBaselineSeqNullable                         sql.NullInt64
+		id, lastSeq                 int64
+		name, device, state         string
+		createdAt                   string
+		sealedAt                    sql.NullString
+		recoveryBaselineSeqNullable sql.NullInt64
 	)
 	err := row.Scan(&id, &name, &device, &state, &createdAt, &sealedAt, &lastSeq, &recoveryBaselineSeqNullable)
 	if err != nil {
@@ -122,7 +127,7 @@ func scanSourceRow(row scannable) (*model.EntropySource, error) {
 		Device:    device,
 		State:     state,
 		CreatedAt: ca,
-		SealedAt:  scanNullTime(sealedAt),
+		SealedAt:  scanNullTimeStr(sealedAt),
 		LastSeq:   lastSeq,
 	}
 	if recoveryBaselineSeqNullable.Valid {

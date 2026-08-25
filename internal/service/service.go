@@ -57,6 +57,8 @@ func New(db *sql.DB) *Service {
 func (s *Service) RegisterSource(name, device string, now time.Time) (int64, error) {
 	if existing, err := s.sources.GetByNameDevice(name, device); err == nil && existing != nil {
 		return 0, model.ErrConflict
+	} else if err != nil && !model.IsNotFound(err) {
+		return 0, err
 	}
 	src := &model.EntropySource{Name: name, Device: device}
 	return s.sources.Create(src, now)

@@ -25,7 +25,7 @@ func (m *StateMachine) Degrade(id int64, now time.Time) error {
 		return err
 	}
 	switch src.State {
-	case model.SourceStateEnabled, model.SourceStateObserving:
+	case model.SourceStateObserving:
 		return m.sources.UpdateState(id, model.SourceStateDegraded, nil)
 	default:
 		return model.ErrTransition
