@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS entropy_sources (
 	recovery_baseline_seq INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sources_device ON entropy_sources(device);
+-- 同名同设备熵源唯一：注册幂等的硬约束，杜绝并发重复创建多个熵源。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sources_name_device ON entropy_sources(name, device);
 
 CREATE TABLE IF NOT EXISTS sample_windows (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,

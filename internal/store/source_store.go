@@ -16,21 +16,52 @@ type SourceStore struct {
 func NewSourceStore(db *sql.DB) *SourceStore { return &SourceStore{db: db} }
 
 // Create 写入新熵源，初始态 enabled。
+//
+// 同名同设备唯一：在事务内先查重再插入，并以 uq_sources_name_device 唯一索引兜底。
+// 并发重复注册时，仅一个请求成功创建并返回其 ID；其余请求收到携带已存在 ID 的
+// ConflictError，由上层以冲突明确报告，而非模糊地各自成功。
 func (s *SourceStore) Create(src *model.EntropySource, now time.Time) (int64, error) {
 	if err := src.Validate(); err != nil {
 		return 0, err
 	}
-	res, err := s.db.Exec(
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }() // 提交成功后为已提交事务的无操作回滚。
+
+	// 先查重：若同名同设备已存在，直接以冲突报告，携带已存在 ID。
+	if existing, err := txGetByNameDevice(tx, src.Name, src.Device); err != nil {
+		if !model.IsNotFound(err) {
+			return 0, err
+		}
+		// 未找到，继续插入。
+	} else {
+		return existing.ID, model.NewConflictError(existing.ID)
+	}
+
+	res, err := tx.Exec(
 		`INSERT INTO entropy_sources(name, device, state, created_at, sealed_at, last_seq, recovery_baseline_seq)
 			 VALUES(?,?,?,?,?,?,?)`,
 		src.Name, src.Device, model.SourceStateEnabled, now.UTC().Format(time.RFC3339Nano),
 		nullTimeVal(nil), 0, nil,
 	)
 	if err != nil {
+		// 唯一索引兜底：并发竞态下对方刚插入，此处捕获唯一约束冲突，
+		// 再回查已存在实体，报告携带其 ID 的冲突。
+		if model.IsConflict(err) {
+			if existing, qerr := txGetByNameDevice(tx, src.Name, src.Device); qerr == nil {
+				return existing.ID, model.NewConflictError(existing.ID)
+			}
+		}
 		return 0, mapErr(err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -47,6 +78,14 @@ func (s *SourceStore) Get(id int64) (*model.EntropySource, error) {
 // GetByNameDevice 按名称+设备查重（注册幂等）。
 func (s *SourceStore) GetByNameDevice(name, device string) (*model.EntropySource, error) {
 	row := s.db.QueryRow(
+		`SELECT id, name, device, state, created_at, sealed_at, last_seq, recovery_baseline_seq
+		 FROM entropy_sources WHERE name = ? AND device = ?`, name, device)
+	return scanSource(row)
+}
+
+// txGetByNameDevice 在事务内按名称+设备查重，供 Create 复用同一事务的可见性。
+func txGetByNameDevice(tx *sql.Tx, name, device string) (*model.EntropySource, error) {
+	row := tx.QueryRow(
 		`SELECT id, name, device, state, created_at, sealed_at, last_seq, recovery_baseline_seq
 		 FROM entropy_sources WHERE name = ? AND device = ?`, name, device)
 	return scanSource(row)

@@ -94,7 +94,13 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 			code = http.StatusBadRequest
 		}
 	}
-	writeJSON(w, code, map[string]string{"error": err.Error()})
+	body := map[string]interface{}{"error": err.Error()}
+	// 冲突实体已存在时，附上其 ID，便于客户端明确报告“已被注册”。
+	var confErr *model.ConflictError
+	if errors.As(err, &confErr) {
+		body["existing_id"] = confErr.ExistingID
+	}
+	writeJSON(w, code, body)
 }
 
 // parseID 从路径解析 int64 ID。

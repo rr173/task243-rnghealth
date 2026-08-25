@@ -1,6 +1,9 @@
 package model
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // 领域错误，供 service / httpapi 做错误映射。
 var (
@@ -41,4 +44,34 @@ func IsTransition(err error) bool {
 // IsInvalidArgument 判断是否为“入参非法”类错误。
 func IsInvalidArgument(err error) bool {
 	return errors.Is(err, ErrInvalidArgument)
+}
+
+// ConflictError 携带冲突实体的标识，供调用方明确报告“已存在”而非模糊成功。
+// 用于同名同设备熵源重复注册等场景：保留首次注册结果，其余请求以 409 报告冲突。
+type ConflictError struct {
+	// ExistingID 已存在的实体 ID。
+	ExistingID int64
+	// Cause 触发冲突的领域错误（通常为 ErrConflict）。
+	Cause error
+}
+
+// Error 实现 error 接口。
+func (e *ConflictError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("conflict: existing entity id=%d: %v", e.ExistingID, e.Cause)
+	}
+	return fmt.Sprintf("conflict: existing entity id=%d", e.ExistingID)
+}
+
+// Unwrap 暴露底层领域错误，使 IsConflict 等判定生效。
+func (e *ConflictError) Unwrap() error {
+	if e.Cause != nil {
+		return e.Cause
+	}
+	return ErrConflict
+}
+
+// NewConflictError 构造一个携带已存在 ID 的冲突错误。
+func NewConflictError(existingID int64) *ConflictError {
+	return &ConflictError{ExistingID: existingID, Cause: ErrConflict}
 }

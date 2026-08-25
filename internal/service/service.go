@@ -53,7 +53,8 @@ func New(db *sql.DB) *Service {
 
 // ---- 熵源 ----
 
-// RegisterSource 注册熵源（同名同设备幂等冲突）。
+// RegisterSource 注册熵源。同名同设备重复注册时，仅首次创建成功；
+// 其余请求返回携带已存在 ID 的 ConflictError，由调用方明确报告冲突。
 func (s *Service) RegisterSource(name, device string, now time.Time) (int64, error) {
 	src := &model.EntropySource{Name: name, Device: device}
 	return s.sources.Create(src, now)
